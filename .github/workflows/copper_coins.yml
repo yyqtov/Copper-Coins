@@ -1,0 +1,67 @@
+name: Copper-Coins
+
+on:
+  workflow_dispatch:
+
+jobs:
+  earn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 📥 拉取私库脚本
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/ActionNode-Start-Private
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          path: private
+
+      - name: 📂 复制脚本到工作目录
+        run: cp private/copper_coins.js copper_coins.js
+
+      - name: 🛡️ 启动 GOST 代理
+        if: ${{ env.GOST_PROXY != '' }}
+        env:
+          GOST_PROXY: ${{ secrets.GOST_PROXY }}
+        run: |
+          VERSION=$(curl -s https://api.github.com/repos/ginuerzh/gost/releases/latest \
+            | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
+          echo "📦 GOST 版本: $VERSION"
+          wget -q "https://github.com/ginuerzh/gost/releases/download/v${VERSION}/gost_${VERSION}_linux_amd64.tar.gz"
+          tar -xzf "gost_${VERSION}_linux_amd64.tar.gz"
+          chmod +x gost
+          nohup ./gost -L http://:8080 -F "$GOST_PROXY" > gost.log 2>&1 &
+          sleep 3
+          echo "✅ GOST 已启动，测试连通性..."
+          curl -s -x http://127.0.0.1:8080 https://api.ipify.org | sed 's/\.[0-9]*$/.**/' && echo
+
+      - name: 📦 安装依赖
+        run: |
+          cd private
+          npm install https-proxy-agent 2>/dev/null || true
+          cp -r node_modules ../node_modules 2>/dev/null || true
+
+      - name: 🔧 执行领取任务
+        env:
+          # 多账号直接在 COPPER_ACCOUNT 中换行写入，格式：账号名,email,password
+          COPPER_ACCOUNT: ${{ secrets.COPPER_ACCOUNT }}
+          GOST_PROXY: ${{ secrets.GOST_PROXY }}
+          TG_BOT:     ${{ secrets.TG_BOT }}
+        run: node copper_coins.js
+
+      - name: 📤 推回私库（如有 Cookie 更新）
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          cp copper_coins.js private/copper_coins.js
+          cd private
+          if ! git diff --quiet; then
+            git config user.email "actions@github.com"
+            git config user.name "GitHub Actions"
+            git add copper_coins.js
+            git commit -m "🔄 自动更新 Cookie"
+            git push "https://${PRIVATE_REPO_TOKEN}@github.com/${{ github.repository_owner }}/ActionNode-Start-Private.git" HEAD
+            echo "✅ Cookie 已推回私库"
+          else
+            echo "ℹ️ Cookie 无变化，无需推送"
+          fi
